@@ -1,6 +1,6 @@
 // ========== 配置區 ==========
 // 將此 URL 替換 Google Apps Script 部署 URL
-const API_BASE_URL = 'https://script.google.com/macros/s/AKfycbx-I8VPfV-gKJl4-h4ESocqEMkWadR1xkym0tr8Mv3shBtL2fIt8o5XYoFnQfT6G9fqyw/exec';
+const API_BASE_URL = 'https://script.google.com/macros/s/AKfycbyPLXgvLDZLDJZQ62Uu-nC-u0esfeqx6fODSRELT4_b_sj2jokvHXi70FguzhzZfBOfWA/exec';
 
 // SVG 圖示
 const ICONS = {
@@ -179,7 +179,7 @@ async function loadAllSummaries() {
     try {
         showState('loading');
 
-        const response = await fetch(`${API_BASE_URL}?channel=${state.channel}&action=all`);
+        const response = await fetch(`${API_BASE_URL}?channel=${state.channel}`);
 
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);

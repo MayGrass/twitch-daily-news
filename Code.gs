@@ -15,6 +15,10 @@
  * CSV 格式：
  * - 欄位 A: date (YYYY-MM-DD)
  * - 欄位 B: summary_json (完整 JSON 字串)
+ * 
+ * API 端點：
+ * - GET /?channel={channel} : 獲取頻道的所有摘要
+ * - GET /?channel={channel}&date={YYYY-MM-DD} : 獲取特定日期的摘要
  */
 
 /**
@@ -22,15 +26,17 @@
  * 
  * 支援參數：
  * - channel: 頻道名稱（必填）
- * - action: 操作類型（目前僅支援 'all'）
+ * - date: 特定日期（YYYY-MM-DD，可選）
  * 
- * 範例：?channel=godjj&action=all
+ * 範例：
+ * - ?channel=godjj （獲取所有摘要）
+ * - ?channel=godjj&date=2026-02-10 （獲取特定日期摘要）
  */
 function doGet(e) {
     try {
         const params = e.parameter;
         const channel = params.channel?.toLowerCase();
-        const action = params.action || 'all';
+        const date = params.date;
 
         // 驗證頻道參數
         if (!channel) {
@@ -40,15 +46,12 @@ function doGet(e) {
             });
         }
 
-        // 路由到對應的處理函數
-        if (action === 'all') {
+        // 如果有 date 參數，獲取特定日期摘要；否則獲取所有摘要
+        if (date) {
+            return getSummaryByDate(channel, date);
+        } else {
             return getAllSummaries(channel);
         }
-
-        return createJsonResponse({
-            success: false,
-            detail: `不支援的操作: ${action}`
-        });
 
     } catch (error) {
         Logger.log('doGet 錯誤: ' + error.toString());
@@ -64,11 +67,8 @@ function doGet(e) {
  */
 function getAllSummaries(channelName) {
     try {
-        const ss = SpreadsheetApp.getActiveSpreadsheet();
-        const sheet = ss.getSheetByName(channelName);
-
-        // 如果找不到對應的分頁
-        if (!sheet) {
+        const sheetData = getSheetData(channelName);
+        if (!sheetData) {
             return createJsonResponse({
                 success: true,
                 channel: channelName,
@@ -77,19 +77,7 @@ function getAllSummaries(channelName) {
             });
         }
 
-        // 讀取所有資料（跳過標題行）
-        const data = sheet.getDataRange().getValues();
-
-        if (data.length <= 1) {
-            // 只有標題行或空表格
-            return createJsonResponse({
-                success: true,
-                channel: channelName,
-                summaries: [],
-                total: 0
-            });
-        }
-
+        const { data } = sheetData;
         const summaries = [];
 
         // 從第二行開始處理（第一行是標題：date, summary_json）
@@ -144,8 +132,111 @@ function getAllSummaries(channelName) {
 }
 
 /**
+ * 獲取指定頻道和日期的摘要
+ */
+function getSummaryByDate(channelName, targetDate) {
+    try {
+        const sheetData = getSheetData(channelName);
+        if (!sheetData) {
+            return createJsonResponse({
+                success: false,
+                detail: `找不到頻道 "${channelName}" 的資料`
+            });
+        }
+
+        const { data } = sheetData;
+
+        // 從第二行開始處理（第一行是標題：date, summary_json）
+        for (let i = 1; i < data.length; i++) {
+            const row = data[i];
+            const date = row[0]; // A 欄：日期
+            const jsonString = row[1]; // B 欄：JSON 字串
+
+            // 跳過空行
+            if (!date || !jsonString) {
+                continue;
+            }
+
+            // 檢查日期是否匹配
+            if (formatDate(date) === targetDate) {
+                try {
+                    // 解析 JSON 字串
+                    const summaryData = JSON.parse(jsonString);
+
+                    // 返回單個摘要物件
+                    return createJsonResponse({
+                        success: true,
+                        channel: channelName,
+                        date: targetDate,
+                        summary: {
+                            hot_topics: summaryData.hot_topics || [],
+                            new_memes: summaryData.new_memes || [],
+                            important_events: summaryData.important_events || [],
+                            highlights: summaryData.highlights || []
+                        }
+                    });
+                } catch (parseError) {
+                    Logger.log(`❌ 解析日期 ${targetDate} 的 JSON 失敗`);
+                    Logger.log(`   錯誤訊息: ${parseError.message}`);
+                    Logger.log(`   JSON 前 150 字元: ${jsonString.substring(0, 150)}...`);
+                    return createJsonResponse({
+                        success: false,
+                        detail: `解析日期 ${targetDate} 的資料時發生錯誤`
+                    });
+                }
+            }
+        }
+
+        // 如果沒有找到匹配的日期
+        return createJsonResponse({
+            success: false,
+            detail: `找不到日期 ${targetDate} 的摘要資料`
+        });
+
+    } catch (error) {
+        Logger.log('getSummaryByDate 錯誤: ' + error.toString());
+        return createJsonResponse({
+            success: false,
+            detail: '獲取摘要時發生錯誤: ' + error.message
+        });
+    }
+}
+
+/**
+ * 獲取昨天的日期（YYYY-MM-DD 格式）
+ * @returns {string} 昨天的日期字串
+ */
+function getYesterdayDate() {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    const year = yesterday.getFullYear();
+    const month = String(yesterday.getMonth() + 1).padStart(2, '0');
+    const day = String(yesterday.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+}
+
+/**
+ * 獲取工作表數據
+ * @param {string} channelName - 頻道名稱
+ * @returns {Object|null} 包含sheet和data的物件，如果找不到則返回null
+ */
+function getSheetData(channelName) {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(channelName);
+
+    if (!sheet) {
+        return null;
+    }
+
+    const data = sheet.getDataRange().getValues();
+    return { sheet, data };
+}
+
+/**
  * 格式化日期為 YYYY-MM-DD
- * @param {string|Date|*} date - 日期物件、日期字串或其他類型
+ * @param {string|Date} date - 日期物件或日期字串
  * @returns {string} YYYY-MM-DD 格式的日期字串
  */
 function formatDate(date) {
@@ -178,6 +269,17 @@ function createJsonResponse(data) {
 }
 
 /**
+ * 記錄摘要統計資訊到日誌
+ * @param {Object} summary - 摘要物件
+ */
+function logSummaryStats(summary) {
+    Logger.log(`- 熱門話題數: ${summary.hot_topics?.length || 0}`);
+    Logger.log(`- 新梗數: ${summary.new_memes?.length || 0}`);
+    Logger.log(`- 重要事件數: ${summary.important_events?.length || 0}`);
+    Logger.log(`- 精華片段數: ${summary.highlights?.length || 0}`);
+}
+
+/**
  * ========== 測試與工具函數 ==========
  */
 
@@ -195,7 +297,11 @@ function testApi() {
 
     Logger.log('========== 測試開始 ==========');
     Logger.log(`測試頻道: ${testChannel}`);
-    Logger.log(`提示: 請確保 Google Sheets 有名為 "${testChannel}" 的分頁\n`);
+    Logger.log(`提示: 請確保 Google Sheets 有名為 "${testChannel}" 的分頁`);
+    Logger.log(`API 使用方式:`);
+    Logger.log(`- 所有摘要: ?channel=${testChannel}`);
+    Logger.log(`- 指定日期: ?channel=${testChannel}&date=YYYY-MM-DD`);
+    Logger.log(`測試將檢查所有摘要 API 和昨天日期的指定日期 API\n`);
 
     // 測試獲取摘要
     const response = getAllSummaries(testChannel);
@@ -210,10 +316,7 @@ function testApi() {
     if (data.summaries && data.summaries.length > 0) {
         Logger.log(`\n第一筆摘要範例:`);
         Logger.log(`- 日期: ${data.summaries[0].date}`);
-        Logger.log(`- 熱門話題數: ${data.summaries[0].hot_topics?.length || 0}`);
-        Logger.log(`- 新梗數: ${data.summaries[0].new_memes?.length || 0}`);
-        Logger.log(`- 重要事件數: ${data.summaries[0].important_events?.length || 0}`);
-        Logger.log(`- 精華片段數: ${data.summaries[0].highlights?.length || 0}`);
+        logSummaryStats(data.summaries[0]);
     }
 
     if (data.success && data.total > 0) {
@@ -224,6 +327,26 @@ function testApi() {
         Logger.log('  2. 該分頁是否有資料（至少要有標題行 + 一筆資料）');
     } else {
         Logger.log('\n❌ 測試失敗: ' + data.detail);
+    }
+
+    // 測試指定日期的摘要（使用昨天的日期）
+    const yesterdayDate = getYesterdayDate();
+    Logger.log(`\n測試指定日期 API (昨天: ${yesterdayDate})`);
+
+    const dateResponse = getSummaryByDate(testChannel, yesterdayDate);
+    const dateContent = dateResponse.getContent();
+    const dateData = JSON.parse(dateContent);
+
+    Logger.log('日期 API 響應:');
+    Logger.log(`- 成功: ${dateData.success}`);
+    if (dateData.success) {
+        Logger.log(`- 頻道: ${dateData.channel}`);
+        Logger.log(`- 日期: ${dateData.date}`);
+        logSummaryStats(dateData.summary);
+        Logger.log('✅ 指定日期 API 測試成功！');
+    } else {
+        Logger.log(`⚠️ 指定日期 API 測試: ${dateData.detail}`);
+        Logger.log('   (這可能是正常的，因為昨天可能沒有資料)');
     }
 
     Logger.log('\n========== 測試結束 ==========');
@@ -246,7 +369,7 @@ function listAvailableChannels() {
 
         Logger.log(`${index + 1}. ${name}`);
         Logger.log(`   - 資料筆數: ${dataCount}`);
-        Logger.log(`   - API 網址: ?channel=${name}&action=all\n`);
+        Logger.log(`   - API 網址: ?channel=${name}\n`);
     });
 
     Logger.log('===================================');
